@@ -1,2 +1,0 @@
-# peppa
-Isolated AI Agents

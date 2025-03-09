@@ -1,0 +1,15 @@
+name: Open Google
+description: Task to open Google in a web browser
+os: linux
+aiModel: deepseek
+task: Open Google in a web browser and search for "Peppa AI"
+systemPrompt: |
+  You are an AI agent operating in a Linux environment.
+  Your task is to open a web browser, navigate to Google, and perform a search.
+  Think step by step and explain your reasoning.
+options:
+  memory: 256
+  vgaMemory: 16
+  networkEnabled: true
+  persistState: false
+  autostart: true
