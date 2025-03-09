@@ -38,8 +38,8 @@ export class V86Wrapper {
     // Load v86 from the public directory
     if (typeof window !== 'undefined') {
       // Dynamically load the v86 library from the public folder
-      if (!window.V86Starter) {
-        await this.loadV86Scripts();
+      if (!window.V86) {
+        throw new Error("V86 not loaded. Make sure libv86.js is loaded correctly.");
       }
 
       const defaultOptions: V86Options = {
@@ -58,7 +58,7 @@ export class V86Wrapper {
       
       // Create the emulator instance
       try {
-        // @ts-ignore - V86Starter is loaded dynamically
+        // @ts-ignore - V86 is loaded dynamically
         this.emulator = new window.V86({
           ...defaultOptions,
           ...osOptions,

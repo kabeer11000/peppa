@@ -3,12 +3,14 @@ import { useRouter } from 'next/router';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { EmulatorCheck } from '@/components/EmulatorCheck';
 import { AIAgent, AIAgentMessage } from '@/lib/ai-agent';
 import { V86Wrapper } from '@/lib/v86-wrapper';
 import { getAvailableModels, getAvailableProviders } from '@/lib/ai-models';
 import { db } from '@/lib/firebase';
+import { useToast } from '@/components/ui/use-toast';
+import { AlertCircle, Terminal, Send, StopCircle, PlayCircle, RefreshCw } from 'lucide-react';
 import Head from 'next/head';
 
 interface Environment {
@@ -37,6 +39,14 @@ export default function EnvironmentPage() {
   const containerRef = useRef<HTMLDivElement>(null);
   const aiAgentRef = useRef<AIAgent | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
+
+  // Scroll to bottom of messages
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages]);
 
   // Fetch environment data
   useEffect(() => {
@@ -45,7 +55,6 @@ export default function EnvironmentPage() {
     const fetchEnvironment = async () => {
       try {
         setLoading(true);
-        // Get environment from Firestore
         const docRef = db.collection('environments').doc(id as string);
         const doc = await docRef.get();
 
@@ -82,12 +91,11 @@ export default function EnvironmentPage() {
         const emulator = new V86Wrapper(environment.os);
         emulatorRef.current = emulator;
 
-        // Initialize emulator - ensure containerRef.current is not null
-        if (containerRef.current) {
-          await emulator.init(containerRef.current);
-        } else {
+        // Initialize emulator
+        if (!containerRef.current) {
           throw new Error("Container reference is null");
         }
+        await emulator.init(containerRef.current);
 
         // Create AI agent
         const agent = new AIAgent({
@@ -107,14 +115,22 @@ export default function EnvironmentPage() {
         // Subscribe to agent updates
         agent.onUpdate((state) => {
           setMessages(state.history);
-          setAgentStatus(state.isProcessing ? 'running' : 'idle');
+          setAgentStatus(state.status);
         });
 
         aiAgentRef.current = agent;
         setInitialized(true);
+
+        // Start the agent
+        await agent.start();
       } catch (err) {
         console.error('Error initializing emulator:', err);
         setError('Failed to initialize emulator');
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to initialize emulator. Please check if all required files are present.",
+        });
       }
     };
 
@@ -131,183 +147,204 @@ export default function EnvironmentPage() {
         aiAgentRef.current = null;
       }
     };
-  }, [environment, initialized]);
-
-  // Scroll to bottom of messages when new ones arrive
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const handleStartAgent = async () => {
-    if (!aiAgentRef.current) return;
-    
-    setAgentStatus('starting');
-    await aiAgentRef.current.start();
-  };
-
-  const handleStopAgent = () => {
-    if (!aiAgentRef.current) return;
-    
-    aiAgentRef.current.stop();
-    setAgentStatus('stopped');
-  };
-
-  const handleRestartEmulator = () => {
-    if (!emulatorRef.current) return;
-    
-    emulatorRef.current.restart();
-  };
+  }, [environment, initialized, toast]);
 
   const handleSendMessage = async () => {
-    if (!aiAgentRef.current || !input.trim()) return;
+    if (!input.trim() || !aiAgentRef.current || agentStatus !== 'running') return;
 
     const message = input.trim();
     setInput('');
     await aiAgentRef.current.sendUserMessage(message);
   };
 
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
+
+  const handleRestartEmulator = async () => {
+    if (emulatorRef.current) {
+      emulatorRef.current.restart();
+      toast({
+        title: "Emulator restarted",
+        description: "The emulator has been restarted successfully.",
+      });
+    }
+  };
+
+  const handleToggleAgent = async () => {
+    if (!aiAgentRef.current) return;
+
+    if (agentStatus === 'running') {
+      aiAgentRef.current.stop();
+      toast({
+        title: "Agent stopped",
+        description: "The AI agent has been stopped.",
+      });
+    } else {
+      await aiAgentRef.current.start();
+      toast({
+        title: "Agent started",
+        description: "The AI agent has been started.",
+      });
+    }
+  };
+
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="flex justify-center items-center h-screen">
         <p>Loading environment...</p>
       </div>
     );
   }
 
-  if (error) {
+  if (error || !environment) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Card>
+      <div className="flex justify-center items-center h-screen">
+        <Card className="w-96">
           <CardHeader>
-            <CardTitle>Error</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-destructive" />
+              Error
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <p>{error}</p>
+            <p>{error || 'Environment not found'}</p>
           </CardContent>
           <CardFooter>
-            <Button onClick={() => router.push('/dashboard')}>Back to Dashboard</Button>
+            <Button onClick={() => router.push('/dashboard')}>Return to Dashboard</Button>
           </CardFooter>
         </Card>
       </div>
     );
   }
 
-  if (!environment) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <p>Environment not found</p>
-      </div>
-    );
-  }
-
   return (
-    <>
+    <div className="flex flex-col h-screen">
       <Head>
-        <title>{environment.name} - Peppa</title>
-        <meta name="description" content={`AI environment: ${environment.description}`} />
+        <title>{environment.name} - Environment</title>
       </Head>
-      <div className="container mx-auto p-4">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold">{environment.name}</h1>
-            <p className="text-gray-500">{environment.description}</p>
+
+      <header className="sticky top-0 z-40 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div className="container flex h-14 items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Button variant="ghost" onClick={() => router.push('/dashboard')}>
+              Back
+            </Button>
+            <h1 className="font-bold text-xl">{environment.name}</h1>
           </div>
-          <Button variant="outline" onClick={() => router.push('/dashboard')}>
-            Back to Dashboard
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRestartEmulator}
+              className="flex items-center gap-2"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Restart
+            </Button>
+            <Button
+              variant={agentStatus === 'running' ? "destructive" : "secondary"}
+              size="sm"
+              onClick={handleToggleAgent}
+              className="flex items-center gap-2"
+            >
+              {agentStatus === 'running' ? (
+                <>
+                  <StopCircle className="h-4 w-4" />
+                  Stop Agent
+                </>
+              ) : (
+                <>
+                  <PlayCircle className="h-4 w-4" />
+                  Start Agent
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <main className="flex-1 container py-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="flex flex-col space-y-4">
+          <EmulatorCheck />
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Terminal className="h-5 w-5" />
+                Emulator
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div ref={containerRef} className="w-full h-[480px] bg-black rounded-lg overflow-hidden" />
+            </CardContent>
+          </Card>
         </div>
 
-        <EmulatorCheck />
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="md:col-span-2">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center justify-between">
-                  <span>Emulator ({environment.os})</span>
-                  <Button variant="ghost" size="sm" onClick={handleRestartEmulator}>
-                    Restart
-                  </Button>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div 
-                  ref={containerRef} 
-                  className="relative bg-black w-full h-[400px] overflow-hidden"
-                />
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="md:col-span-1">
-            <Card className="h-full flex flex-col">
-              <CardHeader>
-                <CardTitle className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span>AI Agent ({environment.aiModel})</span>
-                    <div 
-                      className={`w-2 h-2 rounded-full ${
-                        agentStatus === 'idle' ? 'bg-yellow-500' : 
-                        agentStatus === 'running' ? 'bg-green-500' : 
-                        agentStatus === 'starting' ? 'bg-blue-500' : 
-                        'bg-red-500'
-                      }`} 
-                    />
-                  </div>
-                  {agentStatus === 'idle' || agentStatus === 'stopped' ? (
-                    <Button variant="outline" size="sm" onClick={handleStartAgent}>Start</Button>
-                  ) : (
-                    <Button variant="outline" size="sm" onClick={handleStopAgent}>Stop</Button>
-                  )}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="flex-grow overflow-hidden flex flex-col">
-                <div className="flex-grow overflow-y-auto mb-4 space-y-4">
-                  {messages
-                    .filter(msg => msg.role !== 'system')
-                    .map((msg, index) => (
+        <div className="flex flex-col space-y-4">
+          <Card className="flex-1 flex flex-col">
+            <CardHeader>
+              <CardTitle>AI Assistant</CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 flex flex-col">
+              <ScrollArea className="flex-1 h-[400px] pr-4">
+                <div className="space-y-4">
+                  {messages.map((msg, i) => (
+                    <div
+                      key={i}
+                      className={`flex flex-col ${
+                        msg.role === 'assistant' ? 'items-start' : 'items-end'
+                      }`}
+                    >
                       <div
-                        key={index}
-                        className={`p-3 rounded-lg ${
-                          msg.role === 'user'
-                            ? 'bg-primary text-primary-foreground ml-4'
-                            : 'bg-muted text-foreground mr-4'
+                        className={`rounded-lg px-4 py-2 max-w-[80%] ${
+                          msg.role === 'assistant'
+                            ? 'bg-secondary text-secondary-foreground'
+                            : msg.role === 'user'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-muted text-muted-foreground text-sm italic'
                         }`}
                       >
-                        <div className="text-xs opacity-70 mb-1">
-                          {msg.role === 'user' ? 'You' : 'AI'}
-                        </div>
                         <div className="whitespace-pre-wrap">{msg.content}</div>
+                        {msg.type === 'error' && (
+                          <div className="text-destructive text-sm mt-1">
+                            {msg.metadata?.error}
+                          </div>
+                        )}
                       </div>
-                    ))}
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {msg.timestamp.toLocaleTimeString()}
+                      </div>
+                    </div>
+                  ))}
                   <div ref={messagesEndRef} />
                 </div>
-
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="Ask the AI agent..."
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSendMessage();
-                      }
-                    }}
-                    disabled={agentStatus !== 'idle' && agentStatus !== 'running'}
-                  />
-                  <Button 
-                    onClick={handleSendMessage}
-                    disabled={agentStatus !== 'idle' && agentStatus !== 'running'}
-                  >
-                    Send
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+              </ScrollArea>
+            </CardContent>
+            <CardFooter className="pt-4">
+              <div className="flex w-full items-center space-x-2">
+                <Input
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyPress={handleKeyPress}
+                  placeholder="Type your message..."
+                  disabled={agentStatus !== 'running'}
+                />
+                <Button
+                  onClick={handleSendMessage}
+                  disabled={!input.trim() || agentStatus !== 'running'}
+                  className="flex items-center gap-2"
+                >
+                  <Send className="h-4 w-4" />
+                  Send
+                </Button>
+              </div>
+            </CardFooter>
+          </Card>
         </div>
-      </div>
-    </>
+      </main>
+    </div>
   );
 } 

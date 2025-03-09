@@ -2,28 +2,61 @@ import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, ExternalLink, FileDown } from 'lucide-react';
+import { ScrollArea } from './ui/scroll-area';
+
+interface EmulatorFile {
+  path: string;
+  name: string;
+  description: string;
+  required: boolean;
+}
+
+const REQUIRED_FILES: EmulatorFile[] = [
+  {
+    path: '/v86/libv86.js',
+    name: 'V86 Library',
+    description: 'Main emulator library',
+    required: true
+  },
+  {
+    path: '/v86/v86.wasm',
+    name: 'V86 WebAssembly',
+    description: 'WebAssembly binary for the emulator',
+    required: true
+  },
+  {
+    path: '/v86/bios/seabios.bin',
+    name: 'SeaBIOS',
+    description: 'BIOS firmware',
+    required: true
+  },
+  {
+    path: '/v86/bios/vgabios.bin',
+    name: 'VGA BIOS',
+    description: 'Video BIOS firmware',
+    required: true
+  },
+  {
+    path: '/v86/images/linux.iso',
+    name: 'Linux ISO',
+    description: 'Linux system image',
+    required: true
+  }
+];
 
 export function EmulatorCheck() {
-  const [missingFiles, setMissingFiles] = useState<string[]>([]);
+  const [missingFiles, setMissingFiles] = useState<EmulatorFile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
     const checkFiles = async () => {
-      const files = [
-        '/v86/libv86.js',
-        '/v86/v86.wasm',
-        '/v86/bios/seabios.bin',
-        '/v86/bios/vgabios.bin',
-        '/v86/images/linux.iso',
-      ];
+      const missing: EmulatorFile[] = [];
 
-      const missing: string[] = [];
-
-      for (const file of files) {
+      for (const file of REQUIRED_FILES) {
         try {
-          const response = await fetch(file, { method: 'HEAD' });
+          const response = await fetch(file.path, { method: 'HEAD' });
           if (!response.ok) {
             missing.push(file);
           }
@@ -40,39 +73,68 @@ export function EmulatorCheck() {
   }, []);
 
   if (isLoading) {
-    return <div>Checking emulator files...</div>;
+    return (
+      <Card className="border-muted">
+        <CardContent className="pt-6">
+          <div className="flex items-center justify-center text-muted-foreground">
+            Checking emulator files...
+          </div>
+        </CardContent>
+      </Card>
+    );
   }
 
   if (missingFiles.length === 0) {
-    return null; // All files are present, no need to show anything
+    return null;
   }
 
+  const requiredMissing = missingFiles.filter(f => f.required);
+  const optionalMissing = missingFiles.filter(f => !f.required);
+
   return (
-    <Card className="mb-8 border-amber-500">
+    <Card className="border-amber-500/50">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <AlertCircle className="h-5 w-5 text-amber-500" />
+        <CardTitle className="flex items-center gap-2 text-amber-500">
+          <AlertCircle className="h-5 w-5" />
           Emulator Files Missing
         </CardTitle>
         <CardDescription>
-          The V86 emulator needs additional files to work properly.
+          Some required files are missing for the V86 emulator to work properly.
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Files not found</AlertTitle>
+          <AlertTitle>Required Files Missing</AlertTitle>
           <AlertDescription>
-            {missingFiles.length === 1 
-              ? `The following file is missing: ${missingFiles[0]}`
-              : `${missingFiles.length} emulator files are missing.`
+            {requiredMissing.length === 1 
+              ? 'One required file is missing'
+              : `${requiredMissing.length} required files are missing`
             }
             {showDetails && (
-              <ul className="mt-2 list-disc pl-5">
-                {missingFiles.map((file) => (
-                  <li key={file}>{file}</li>
-                ))}
-              </ul>
+              <ScrollArea className="h-[200px] mt-2">
+                <div className="space-y-2">
+                  {requiredMissing.map((file) => (
+                    <div key={file.path} className="rounded-md bg-destructive/10 p-2">
+                      <div className="font-medium">{file.name}</div>
+                      <div className="text-sm opacity-90">{file.description}</div>
+                      <code className="text-xs block mt-1 opacity-75">{file.path}</code>
+                    </div>
+                  ))}
+                  {optionalMissing.length > 0 && (
+                    <>
+                      <div className="text-sm font-medium mt-4 mb-2">Optional Files:</div>
+                      {optionalMissing.map((file) => (
+                        <div key={file.path} className="rounded-md bg-muted p-2">
+                          <div className="font-medium">{file.name}</div>
+                          <div className="text-sm opacity-90">{file.description}</div>
+                          <code className="text-xs block mt-1 opacity-75">{file.path}</code>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </ScrollArea>
             )}
           </AlertDescription>
         </Alert>
@@ -81,14 +143,18 @@ export function EmulatorCheck() {
         <Button 
           variant="outline" 
           onClick={() => setShowDetails(!showDetails)}
+          className="flex items-center gap-2"
         >
+          <FileDown className="h-4 w-4" />
           {showDetails ? 'Hide Details' : 'Show Details'}
         </Button>
         <Button 
           variant="secondary"
           onClick={() => window.open('https://github.com/copy/v86/releases', '_blank')}
+          className="flex items-center gap-2"
         >
-          Get V86 Files
+          <ExternalLink className="h-4 w-4" />
+          Download V86 Files
         </Button>
       </CardFooter>
     </Card>
