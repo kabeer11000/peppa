@@ -26,6 +26,17 @@ declare global {
   }
 }
 
+export interface V86WrapperState {
+  isRunning: boolean;
+  osType: string;
+  screenshot: string | null;
+  status: string;
+  memoryUsage: number;
+  networkActive: boolean;
+  bootProgress: number;
+  lastAction: string;
+}
+
 export class V86Wrapper {
   private emulator: any = null;
   private screenContainer: HTMLDivElement | null = null;
@@ -35,7 +46,12 @@ export class V86Wrapper {
   private processingKeyboard: boolean = false;
   private lastScreenshot: string | null = null;
   private onUpdateCallbacks: Array<(state: V86WrapperState) => void> = [];
-  private eventListeners: { event: string; callback: () => void }[] = [];
+  private eventListeners: { event: string; callback: (...args: any[]) => void }[] = [];
+  private status: string = 'initializing';
+  private memoryUsage: number = 0;
+  private networkActive: boolean = false;
+  private bootProgress: number = 0;
+  private lastAction: string = '';
 
   constructor(osType: string = "linux") {
     this.osType = osType;
@@ -52,61 +68,99 @@ export class V86Wrapper {
     }
 
     this.screenContainer = container;
+    this.status = 'loading v86';
+    this.notifyUpdate();
+    console.log('[V86] Starting initialization');
 
-    // Load v86 from the public directory
-    if (typeof window !== 'undefined') {
-      // Check for V86 or V86Starter
-      const V86Class = window.V86 || window.V86Starter;
-      if (!V86Class) {
-        throw new Error("V86 not loaded. Make sure libv86.js is loaded correctly.");
-      }
-
-      const defaultOptions: V86Options = {
-        memory_size: 128 * 1024 * 1024,
-        vga_memory_size: 8 * 1024 * 1024,
-        screen_container: container,
-        acpi: true,
-        autostart: true,
-        disable_mouse: false,
-        disable_keyboard: false,
-        wasm_path: '/v86/v86.wasm', // Path to WebAssembly file in public directory
-      };
-
-      // Add OS-specific options
-      const osOptions = this.getOSOptions();
-      
-      // Create the emulator instance
+    // Load v86 script if not already loaded
+    if (!window.V86 && !window.V86Starter) {
       try {
-        // Ensure container has dimensions
-        if (container.clientWidth === 0 || container.clientHeight === 0) {
-          throw new Error("Container must have non-zero dimensions");
-        }
+        console.log('[V86] Loading v86 script');
+        await this.loadV86Scripts();
+      } catch (error) {
+        this.status = 'failed to load v86';
+        this.notifyUpdate();
+        console.error('[V86] Script loading failed:', error);
+        throw error;
+      }
+    }
 
-        // Create a canvas element to test if we can get context
-        const testCanvas = document.createElement('canvas');
-        const context = testCanvas.getContext('2d');
-        if (!context) {
-          throw new Error("Unable to get 2D context. WebGL might not be supported.");
-        }
+    // Check for V86 or V86Starter
+    const V86Class = window.V86 || window.V86Starter;
+    if (!V86Class) {
+      this.status = 'v86 not available';
+      this.notifyUpdate();
+      throw new Error("V86 not loaded. Make sure libv86.js is loaded correctly.");
+    }
 
-        // @ts-ignore - V86 is loaded dynamically
-        this.emulator = new V86Class({
-          ...defaultOptions,
-          ...osOptions,
-          ...options,
+    console.log('[V86] Script loaded, preparing configuration');
+
+    const defaultOptions: V86Options = {
+      memory_size: 128 * 1024 * 1024,
+      vga_memory_size: 8 * 1024 * 1024,
+      screen_container: container,
+      acpi: true,
+      autostart: true,
+      disable_mouse: false,
+      disable_keyboard: false,
+      wasm_path: '/v86/v86.wasm',
+    };
+
+    // Add OS-specific options
+    const osOptions = this.getOSOptions();
+    console.log('[V86] Using OS options:', osOptions);
+    
+    // Create the emulator instance
+    try {
+      this.status = 'creating emulator';
+      this.notifyUpdate();
+
+      const finalOptions = {
+        ...defaultOptions,
+        ...osOptions,
+        ...options,
+      };
+      console.log('[V86] Final emulator options:', finalOptions);
+
+      // Verify required files exist before initialization
+      await this.verifyRequiredFiles(finalOptions);
+
+      // @ts-ignore - V86 is loaded dynamically
+      this.emulator = new V86Class(finalOptions);
+      console.log('[V86] Emulator instance created');
+
+      // Set up event listeners
+      this.setupEventListeners();
+      
+      this.isRunning = true;
+      this.status = 'initializing';
+      this.notifyUpdate();
+
+      // Wait for emulator to be ready
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Emulator initialization timeout'));
+        }, 30000); // 30 second timeout
+
+        this.emulator.add_listener("emulator-ready", () => {
+          clearTimeout(timeout);
+          console.log('[V86] Emulator ready event received');
+          resolve();
         });
 
-        // Set up event listeners
-        this.setupEventListeners();
-        
-        this.isRunning = true;
-        this.notifyUpdate();
-      } catch (error) {
-        console.error("Failed to initialize v86 emulator:", error);
-        throw new Error(`Failed to initialize v86 emulator: ${error}`);
-      }
-    } else {
-      throw new Error("V86 can only be initialized in browser environment");
+        // Add error listener
+        this.emulator.add_listener("error", (error: any) => {
+          console.error('[V86] Emulator error:', error);
+          clearTimeout(timeout);
+          reject(new Error(`Emulator error: ${error}`));
+        });
+      });
+
+    } catch (error) {
+      this.status = 'initialization failed';
+      this.notifyUpdate();
+      console.error("[V86] Failed to initialize emulator:", error);
+      throw new Error(`Failed to initialize v86 emulator: ${error}`);
     }
   }
 
@@ -166,25 +220,113 @@ export class V86Wrapper {
     }
   }
 
+  private async verifyRequiredFiles(options: V86Options): Promise<void> {
+    const filesToCheck = [];
+    
+    if (options.bios?.url) filesToCheck.push(options.bios.url);
+    if (options.vga_bios?.url) filesToCheck.push(options.vga_bios.url);
+    if (options.cdrom?.url) filesToCheck.push(options.cdrom.url);
+    if (options.hda?.url) filesToCheck.push(options.hda.url);
+    if (options.fda?.url) filesToCheck.push(options.fda.url);
+    if (options.wasm_path) filesToCheck.push(options.wasm_path);
+
+    console.log('[V86] Verifying required files:', filesToCheck);
+
+    for (const file of filesToCheck) {
+      try {
+        const response = await fetch(file, { method: 'HEAD' });
+        if (!response.ok) {
+          throw new Error(`File ${file} not found (${response.status})`);
+        }
+        console.log(`[V86] Verified file exists: ${file}`);
+      } catch (error) {
+        console.error(`[V86] Failed to verify file ${file}:`, error);
+        throw new Error(`Required file ${file} is not accessible`);
+      }
+    }
+  }
+
   private setupEventListeners(): void {
     if (!this.emulator) return;
 
-    // Add event listeners for emulator state changes
-    const addListener = (event: string, callback: () => void) => {
+    const addListener = (event: string, callback: (...args: any[]) => void) => {
       this.eventListeners.push({ event, callback });
       this.emulator.add_listener(event, callback);
     };
 
+    // System events
     addListener("emulator-ready", () => {
-      console.log("Emulator ready");
+      console.log("[V86] Emulator ready");
+      this.status = 'ready';
+      this.bootProgress = 100;
+      this.updateLastAction('System ready');
       this.notifyUpdate();
     });
 
     addListener("emulator-stopped", () => {
-      console.log("Emulator stopped");
+      console.log("[V86] Emulator stopped");
       this.isRunning = false;
+      this.status = 'stopped';
+      this.updateLastAction('System stopped');
       this.notifyUpdate();
     });
+
+    // Boot and loading events
+    addListener("download-progress", (e: any) => {
+      console.log("[V86] Download progress:", e);
+      this.status = `downloading: ${e.file_name || 'system files'}`;
+      this.bootProgress = Math.min(this.bootProgress + 5, 95);
+      this.updateLastAction(`Downloading ${e.file_name || 'system files'}`);
+      this.notifyUpdate();
+    });
+
+    addListener("download-error", (e: any) => {
+      console.error("[V86] Download error:", e);
+      this.status = 'download error';
+      this.updateLastAction(`Failed to download: ${e.file_name}`);
+      this.notifyUpdate();
+    });
+
+    // Add more detailed boot progress tracking
+    addListener("boot", (e: any) => {
+      console.log("[V86] Boot event:", e);
+      this.status = 'booting';
+      this.updateLastAction('System booting');
+      this.notifyUpdate();
+    });
+
+    addListener("error", (e: any) => {
+      console.error("[V86] Error event:", e);
+      this.status = 'error';
+      this.updateLastAction(`Error: ${e.message || 'Unknown error'}`);
+      this.notifyUpdate();
+    });
+
+    // Screen events
+    addListener("screen-set-mode", () => {
+      console.log("[V86] Screen mode changed");
+      this.updateLastAction('Screen mode changed');
+      this.notifyUpdate();
+    });
+
+    addListener("screen-set-size-graphical", (e: any) => {
+      console.log("[V86] Screen size changed:", e);
+      this.updateLastAction(`Screen size set to ${e.width}x${e.height}`);
+      this.notifyUpdate();
+    });
+
+    // Memory monitoring
+    setInterval(() => {
+      if (this.emulator && this.isRunning) {
+        try {
+          const stats = this.emulator.v86.cpu.devices.memory.stats;
+          this.memoryUsage = stats.allocated;
+          this.notifyUpdate();
+        } catch (error) {
+          console.warn('Could not get memory stats:', error);
+        }
+      }
+    }, 1000);
   }
 
   public async sendText(text: string): Promise<void> {
@@ -371,13 +513,18 @@ export class V86Wrapper {
     return {
       isRunning: this.isRunning,
       osType: this.osType,
-      screenshot: this.lastScreenshot
+      screenshot: this.lastScreenshot,
+      status: this.status,
+      memoryUsage: this.memoryUsage,
+      networkActive: this.networkActive,
+      bootProgress: this.bootProgress,
+      lastAction: this.lastAction
     };
   }
-}
 
-export interface V86WrapperState {
-  isRunning: boolean;
-  osType: string;
-  screenshot: string | null;
+  // Update action tracking
+  public updateLastAction(action: string): void {
+    this.lastAction = action;
+    this.notifyUpdate();
+  }
 }

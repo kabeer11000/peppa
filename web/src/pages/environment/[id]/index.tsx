@@ -6,11 +6,11 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { EmulatorCheck } from '@/components/EmulatorCheck';
 import { AIAgent, AIAgentMessage } from '@/lib/ai-agent';
-import { V86Wrapper } from '@/lib/v86-wrapper';
+import { V86Wrapper, V86WrapperState } from '@/lib/v86-wrapper';
 import { getAvailableModels, getAvailableProviders, AIProvider } from '@/lib/ai-models';
 import { db } from '@/lib/firebase';
 import { useToast } from '@/components/ui/use-toast';
-import { AlertCircle, Terminal, Send, StopCircle, PlayCircle, RefreshCw } from 'lucide-react';
+import { AlertCircle, Terminal, Send, StopCircle, PlayCircle, RefreshCw, Cpu, Network, HardDrive } from 'lucide-react';
 import Head from 'next/head';
 
 interface Environment { 
@@ -35,6 +35,7 @@ export default function EnvironmentPage() {
   const [input, setInput] = useState('');
   const [agentStatus, setAgentStatus] = useState<'idle' | 'starting' | 'running' | 'stopped'>('idle');
   const [containerMounted, setContainerMounted] = useState(false);
+  const [emulatorState, setEmulatorState] = useState<V86WrapperState | null>(null);
   
   const emulatorRef = useRef<V86Wrapper | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -125,6 +126,11 @@ export default function EnvironmentPage() {
         const emulator = new V86Wrapper(environment.os);
         emulatorRef.current = emulator;
 
+        // Subscribe to emulator state updates
+        emulator.onUpdate((state) => {
+          setEmulatorState(state);
+        });
+
         // Initialize emulator with container
         if (!containerRef.current) {
           throw new Error("Container reference is null");
@@ -196,6 +202,32 @@ export default function EnvironmentPage() {
     };
   }, [environment, initialized, toast, containerMounted]);
 
+  // Load V86 script
+  useEffect(() => {
+    const loadV86Script = async () => {
+      const script = document.createElement('script');
+      script.src = '/v86/libv86.js';
+      script.async = true;
+      
+      const loadPromise = new Promise((resolve, reject) => {
+        script.onload = resolve;
+        script.onerror = reject;
+      });
+
+      document.head.appendChild(script);
+      
+      try {
+        await loadPromise;
+        console.log('V86 script loaded successfully');
+      } catch (error) {
+        console.error('Failed to load V86 script:', error);
+        setError('Failed to load emulator script');
+      }
+    };
+
+    loadV86Script();
+  }, []);
+
   const handleSendMessage = async () => {
     if (!input.trim() || !aiAgentRef.current || agentStatus !== 'running') return;
 
@@ -237,6 +269,94 @@ export default function EnvironmentPage() {
         description: "The AI agent has been started.",
       });
     }
+  };
+
+  // Render status panel with improved UI
+  const renderStatusPanel = () => {
+    if (!emulatorState) return null;
+
+    const getStatusColor = () => {
+      switch (emulatorState.status) {
+        case 'ready':
+          return 'text-green-500';
+        case 'stopped':
+          return 'text-red-500';
+        case 'initializing':
+        case 'loading v86':
+        case 'downloading system files':
+          return 'text-yellow-500';
+        default:
+          return 'text-gray-500';
+      }
+    };
+
+    return (
+      <Card className="mb-4">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Cpu className="h-5 w-5" />
+            System Status
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-2 bg-secondary/50 rounded-lg">
+              <span className="flex items-center gap-2">
+                <HardDrive className="h-4 w-4" />
+                Status
+              </span>
+              <span className={`font-mono font-bold ${getStatusColor()}`}>
+                {emulatorState.status}
+              </span>
+            </div>
+
+            {emulatorState.bootProgress < 100 && (
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span>Boot Progress</span>
+                  <span>{emulatorState.bootProgress}%</span>
+                </div>
+                <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
+                  <div 
+                    className="bg-primary h-full transition-all duration-300"
+                    style={{ width: `${emulatorState.bootProgress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="p-2 bg-secondary/50 rounded-lg">
+                <div className="text-sm text-muted-foreground mb-1">Memory</div>
+                <div className="font-mono font-bold">
+                  {(emulatorState.memoryUsage / (1024 * 1024)).toFixed(2)} MB
+                </div>
+              </div>
+
+              <div className="p-2 bg-secondary/50 rounded-lg">
+                <div className="text-sm text-muted-foreground mb-1">Network</div>
+                <div className="font-mono font-bold">
+                  {emulatorState.networkActive ? (
+                    <span className="text-green-500">Active</span>
+                  ) : (
+                    <span className="text-gray-500">Inactive</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {emulatorState.lastAction && (
+              <div className="p-2 bg-secondary/50 rounded-lg">
+                <div className="text-sm text-muted-foreground mb-1">Last Action</div>
+                <div className="font-mono text-sm break-words">
+                  {emulatorState.lastAction}
+                </div>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    );
   };
 
   if (loading) {
@@ -288,6 +408,7 @@ export default function EnvironmentPage() {
               size="sm"
               onClick={handleRestartEmulator}
               className="flex items-center gap-2"
+              disabled={!emulatorState?.isRunning}
             >
               <RefreshCw className="h-4 w-4" />
               Restart
@@ -297,6 +418,7 @@ export default function EnvironmentPage() {
               size="sm"
               onClick={handleToggleAgent}
               className="flex items-center gap-2"
+              disabled={!emulatorState?.isRunning}
             >
               {agentStatus === 'running' ? (
                 <>
@@ -314,82 +436,69 @@ export default function EnvironmentPage() {
         </div>
       </header>
 
-      <main className="flex-1 container py-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="flex flex-col space-y-4">
-          <EmulatorCheck />
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Terminal className="h-5 w-5" />
-                Emulator
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div ref={containerRef} className="w-full h-[480px] bg-black rounded-lg overflow-hidden" />
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="flex flex-col space-y-4">
-          <Card className="flex-1 flex flex-col">
-            <CardHeader>
-              <CardTitle>AI Assistant</CardTitle>
-            </CardHeader>
-            <CardContent className="flex-1 flex flex-col">
-              <ScrollArea className="flex-1 h-[400px] pr-4">
-                <div className="space-y-4">
-                  {messages.map((msg, i) => (
-                    <div
-                      key={i}
-                      className={`flex flex-col ${
-                        msg.role === 'assistant' ? 'items-start' : 'items-end'
-                      }`}
-                    >
-                      <div
-                        className={`rounded-lg px-4 py-2 max-w-[80%] ${
-                          msg.role === 'assistant'
-                            ? 'bg-secondary text-secondary-foreground'
-                            : msg.role === 'user'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-muted text-muted-foreground text-sm italic'
-                        }`}
-                      >
-                        <div className="whitespace-pre-wrap">{msg.content}</div>
-                        {msg.type === 'error' && (
-                          <div className="text-destructive text-sm mt-1">
-                            {msg.metadata?.error}
-                          </div>
-                        )}
-                      </div>
-                      <div className="text-xs text-muted-foreground mt-1">
-                        {msg.timestamp.toLocaleTimeString()}
+      <main className="flex-1 container mx-auto p-4 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="md:col-span-2 space-y-4">
+            <EmulatorCheck />
+            <Card>
+              <CardContent className="p-4">
+                <div 
+                  ref={containerRef} 
+                  className="w-full aspect-video bg-black rounded-lg overflow-hidden relative"
+                >
+                  {!emulatorState?.isRunning && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                      <div className="text-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto mb-2"></div>
+                        <p className="text-white text-sm">{emulatorState?.status || 'Initializing...'}</p>
                       </div>
                     </div>
-                  ))}
-                  <div ref={messagesEndRef} />
+                  )}
                 </div>
-              </ScrollArea>
-            </CardContent>
-            <CardFooter className="pt-4">
-              <div className="flex w-full items-center space-x-2">
-                <Input
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyPress={handleKeyPress}
-                  placeholder="Type your message..."
-                  disabled={agentStatus !== 'running'}
-                />
-                <Button
-                  onClick={handleSendMessage}
-                  disabled={!input.trim() || agentStatus !== 'running'}
-                  className="flex items-center gap-2"
-                >
-                  <Send className="h-4 w-4" />
-                  Send
-                </Button>
-              </div>
-            </CardFooter>
-          </Card>
+              </CardContent>
+            </Card>
+          </div>
+          
+          <div className="space-y-4">
+            {renderStatusPanel()}
+            
+            <Card>
+              <CardHeader>
+                <CardTitle>Chat</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-[400px] pr-4">
+                  <div className="space-y-4">
+                    {messages.map((msg, i) => (
+                      <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`rounded-lg px-4 py-2 max-w-[80%] ${
+                          msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted'
+                        }`}>
+                          {msg.content}
+                        </div>
+                      </div>
+                    ))}
+                    <div ref={messagesEndRef} />
+                  </div>
+                </ScrollArea>
+                <div className="flex gap-2 mt-4">
+                  <Input
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyPress={handleKeyPress}
+                    placeholder="Type a message..."
+                    disabled={!emulatorState?.isRunning || agentStatus !== 'running'}
+                  />
+                  <Button 
+                    onClick={handleSendMessage} 
+                    disabled={!emulatorState?.isRunning || agentStatus !== 'running'}
+                  >
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </main>
     </div>
