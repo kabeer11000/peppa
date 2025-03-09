@@ -10,13 +10,17 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useToast } from "@/components/ui/use-toast"
 import { PlusCircle, Trash2 } from "lucide-react"
 import Head from "next/head"
+import { AIProvider, getAvailableProviders } from "@/lib/ai-models"
 
 type Environment = {
   id: string
   name: string
+  description?: string
   os: string
+  aiProvider: AIProvider
   aiModel: string
-  task: string
+  task?: string
+  userId: string
   createdAt: any
 }
 
@@ -25,8 +29,10 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [newEnvName, setNewEnvName] = useState("")
   const [newEnvOS, setNewEnvOS] = useState("linux")
-  const [newEnvAIModel, setNewEnvAIModel] = useState("deepseek")
+  const [newEnvAIProvider, setNewEnvAIProvider] = useState<AIProvider>("deepseek")
+  const [newEnvAIModel, setNewEnvAIModel] = useState("")
   const [newEnvTask, setNewEnvTask] = useState("")
+  const [newEnvDescription, setNewEnvDescription] = useState("")
   const [dialogOpen, setDialogOpen] = useState(false)
   const router = useRouter()
   const { toast } = useToast()
@@ -58,9 +64,12 @@ export default function DashboardPage() {
         envs.push({
           id: doc.id,
           name: data.name,
+          description: data.description,
           os: data.os,
+          aiProvider: data.aiProvider,
           aiModel: data.aiModel,
           task: data.task,
+          userId: data.userId,
           createdAt: data.createdAt
         })
       })
@@ -92,9 +101,11 @@ export default function DashboardPage() {
         return
       }
 
-      const newEnv = {
+      const newEnv: Omit<Environment, 'id'> = {
         name: newEnvName,
+        description: newEnvDescription,
         os: newEnvOS,
+        aiProvider: newEnvAIProvider,
         aiModel: newEnvAIModel,
         task: newEnvTask,
         userId: user.uid,
@@ -106,16 +117,13 @@ export default function DashboardPage() {
       setEnvironments([
         {
           id: docRef.id,
-          name: newEnvName,
-          os: newEnvOS,
-          aiModel: newEnvAIModel,
-          task: newEnvTask,
-          createdAt: new Date()
+          ...newEnv
         },
         ...environments
       ])
       
       setNewEnvName("")
+      setNewEnvDescription("")
       setNewEnvTask("")
       setDialogOpen(false)
       
@@ -230,6 +238,35 @@ export default function DashboardPage() {
                     </Select>
                   </div>
                   <div className="grid grid-cols-4 items-center gap-4">
+                    <Label htmlFor="description" className="text-right">
+                      Description
+                    </Label>
+                    <Input
+                      id="description"
+                      value={newEnvDescription}
+                      onChange={(e) => setNewEnvDescription(e.target.value)}
+                      className="col-span-3"
+                      placeholder="Environment description"
+                    />
+                  </div>
+                  <div className="grid grid-cols-4 items-center gap-4">
+                    <Label htmlFor="ai-provider" className="text-right">
+                      AI Provider
+                    </Label>
+                    <Select value={newEnvAIProvider} onValueChange={setNewEnvAIProvider}>
+                      <SelectTrigger className="col-span-3">
+                        <SelectValue placeholder="Select AI Provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {getAvailableProviders().map(provider => (
+                          <SelectItem key={provider.id} value={provider.id}>
+                            {provider.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="ai-model" className="text-right">
                       AI Model
                     </Label>
@@ -238,9 +275,10 @@ export default function DashboardPage() {
                         <SelectValue placeholder="Select AI Model" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="deepseek">DeepSeek</SelectItem>
-                        <SelectItem value="gemini">Gemini</SelectItem>
-                        <SelectItem value="claude">Claude</SelectItem>
+                        <SelectItem value="deepseek-coder">DeepSeek Coder</SelectItem>
+                        <SelectItem value="gpt-4">GPT-4</SelectItem>
+                        <SelectItem value="claude-3">Claude 3</SelectItem>
+                        <SelectItem value="gemini-pro">Gemini Pro</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

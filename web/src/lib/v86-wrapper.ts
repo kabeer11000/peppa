@@ -18,6 +18,14 @@ export type V86Options = {
   wasm_path?: string;
 };
 
+// Add V86 to the window type
+declare global {
+  interface Window {
+    V86: any;
+    V86Starter: any;
+  }
+}
+
 export class V86Wrapper {
   private emulator: any = null;
   private screenContainer: HTMLDivElement | null = null;
@@ -27,18 +35,29 @@ export class V86Wrapper {
   private processingKeyboard: boolean = false;
   private lastScreenshot: string | null = null;
   private onUpdateCallbacks: Array<(state: V86WrapperState) => void> = [];
+  private eventListeners: { event: string; callback: () => void }[] = [];
 
   constructor(osType: string = "linux") {
     this.osType = osType;
   }
 
   public async init(container: HTMLDivElement, options: Partial<V86Options> = {}): Promise<void> {
+    if (!container) {
+      throw new Error("Container is required");
+    }
+
+    // Ensure container is in the DOM
+    if (!document.body.contains(container)) {
+      throw new Error("Container must be mounted in the DOM");
+    }
+
     this.screenContainer = container;
 
     // Load v86 from the public directory
     if (typeof window !== 'undefined') {
-      // Dynamically load the v86 library from the public folder
-      if (!window.V86) {
+      // Check for V86 or V86Starter
+      const V86Class = window.V86 || window.V86Starter;
+      if (!V86Class) {
         throw new Error("V86 not loaded. Make sure libv86.js is loaded correctly.");
       }
 
@@ -58,8 +77,20 @@ export class V86Wrapper {
       
       // Create the emulator instance
       try {
+        // Ensure container has dimensions
+        if (container.clientWidth === 0 || container.clientHeight === 0) {
+          throw new Error("Container must have non-zero dimensions");
+        }
+
+        // Create a canvas element to test if we can get context
+        const testCanvas = document.createElement('canvas');
+        const context = testCanvas.getContext('2d');
+        if (!context) {
+          throw new Error("Unable to get 2D context. WebGL might not be supported.");
+        }
+
         // @ts-ignore - V86 is loaded dynamically
-        this.emulator = new window.V86({
+        this.emulator = new V86Class({
           ...defaultOptions,
           ...osOptions,
           ...options,
@@ -139,12 +170,17 @@ export class V86Wrapper {
     if (!this.emulator) return;
 
     // Add event listeners for emulator state changes
-    this.emulator.add_listener("emulator-ready", () => {
+    const addListener = (event: string, callback: () => void) => {
+      this.eventListeners.push({ event, callback });
+      this.emulator.add_listener(event, callback);
+    };
+
+    addListener("emulator-ready", () => {
       console.log("Emulator ready");
       this.notifyUpdate();
     });
 
-    this.emulator.add_listener("emulator-stopped", () => {
+    addListener("emulator-stopped", () => {
       console.log("Emulator stopped");
       this.isRunning = false;
       this.notifyUpdate();
@@ -288,13 +324,29 @@ export class V86Wrapper {
     
     // Stop the emulator
     if (this.isRunning) {
-      this.emulator.stop();
+      try {
+        this.emulator.stop();
+      } catch (error) {
+        console.error("Error stopping emulator:", error);
+      }
     }
     
-    // Clear event listeners
-    this.emulator.remove_all_listeners();
+    // Remove event listeners
+    for (const { event, callback } of this.eventListeners) {
+      try {
+        this.emulator.remove_listener(event, callback);
+      } catch (error) {
+        console.error(`Error removing listener for ${event}:`, error);
+      }
+    }
+    this.eventListeners = [];
+    
+    // Clear references
     this.emulator = null;
+    this.screenContainer = null;
     this.isRunning = false;
+    this.lastScreenshot = null;
+    
     this.notifyUpdate();
   }
 
@@ -328,11 +380,4 @@ export interface V86WrapperState {
   isRunning: boolean;
   osType: string;
   screenshot: string | null;
-}
-
-// Add V86Starter to the window type
-declare global {
-  interface Window {
-    V86Starter: any;
-  }
 }

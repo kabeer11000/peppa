@@ -7,18 +7,18 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { EmulatorCheck } from '@/components/EmulatorCheck';
 import { AIAgent, AIAgentMessage } from '@/lib/ai-agent';
 import { V86Wrapper } from '@/lib/v86-wrapper';
-import { getAvailableModels, getAvailableProviders } from '@/lib/ai-models';
+import { getAvailableModels, getAvailableProviders, AIProvider } from '@/lib/ai-models';
 import { db } from '@/lib/firebase';
 import { useToast } from '@/components/ui/use-toast';
 import { AlertCircle, Terminal, Send, StopCircle, PlayCircle, RefreshCw } from 'lucide-react';
 import Head from 'next/head';
 
-interface Environment {
+interface Environment { 
   id: string;
   name: string;
   description: string;
   os: string;
-  aiProvider: string;
+  aiProvider: AIProvider;
   aiModel: string;
   userId: string;
   createdAt: Date;
@@ -34,12 +34,20 @@ export default function EnvironmentPage() {
   const [messages, setMessages] = useState<AIAgentMessage[]>([]);
   const [input, setInput] = useState('');
   const [agentStatus, setAgentStatus] = useState<'idle' | 'starting' | 'running' | 'stopped'>('idle');
+  const [containerMounted, setContainerMounted] = useState(false);
   
   const emulatorRef = useRef<V86Wrapper | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const aiAgentRef = useRef<AIAgent | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+
+  // Handle container mounting
+  useEffect(() => {
+    if (containerRef.current) {
+      setContainerMounted(true);
+    }
+  }, []);
 
   // Scroll to bottom of messages
   useEffect(() => {
@@ -65,9 +73,29 @@ export default function EnvironmentPage() {
         }
 
         const data = doc.data() as Omit<Environment, 'id' | 'createdAt'> & { createdAt: { toDate: () => Date } };
+        
+        // Validate required fields
+        if (!data.aiProvider || !['deepseek', 'openai', 'anthropic', 'gemini'].includes(data.aiProvider)) {
+          setError('Environment has invalid AI provider configuration');
+          setLoading(false);
+          return;
+        }
+
+        if (!data.aiModel) {
+          setError('Environment is missing AI model configuration');
+          setLoading(false);
+          return;
+        }
+
+        // Set environment with validated data
         setEnvironment({
           id: doc.id,
-          ...data,
+          name: data.name || 'Unnamed Environment',
+          description: data.description || '',
+          os: data.os || 'linux',
+          aiProvider: data.aiProvider as AIProvider,
+          aiModel: data.aiModel,
+          userId: data.userId,
           createdAt: data.createdAt.toDate(),
         });
         setLoading(false);
@@ -83,23 +111,37 @@ export default function EnvironmentPage() {
 
   // Initialize emulator and AI agent
   useEffect(() => {
-    if (!environment || !containerRef.current || initialized) return;
+    if (!environment || !containerRef.current || initialized || !containerMounted) return;
 
     const initEmulator = async () => {
       try {
+        // Validate AI provider
+        const providers = getAvailableProviders();
+        if (!environment.aiProvider || !providers.some(p => p.id === environment.aiProvider)) {
+          throw new Error(`Invalid AI provider: ${environment.aiProvider}`);
+        }
+
         // Create V86 instance
         const emulator = new V86Wrapper(environment.os);
         emulatorRef.current = emulator;
 
-        // Initialize emulator
+        // Initialize emulator with container
         if (!containerRef.current) {
           throw new Error("Container reference is null");
         }
+
+        // Wait for container to be ready and in DOM
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        if (!document.body.contains(containerRef.current)) {
+          throw new Error("Container is not in the DOM");
+        }
+
         await emulator.init(containerRef.current);
 
         // Create AI agent
         const agent = new AIAgent({
-          provider: environment.aiProvider as any,
+          provider: environment.aiProvider,
           model: environment.aiModel,
           task: `operating ${environment.os} environment`,
           systemPrompt: `You are a helpful AI assistant for the ${environment.name} environment, which is running ${environment.os}. 
@@ -138,16 +180,21 @@ export default function EnvironmentPage() {
 
     // Cleanup function
     return () => {
-      if (emulatorRef.current) {
-        emulatorRef.current.destroy();
-        emulatorRef.current = null;
-      }
-      if (aiAgentRef.current) {
-        aiAgentRef.current.stop();
-        aiAgentRef.current = null;
+      try {
+        if (aiAgentRef.current) {
+          aiAgentRef.current.stop();
+          aiAgentRef.current = null;
+        }
+        if (emulatorRef.current) {
+          emulatorRef.current.destroy();
+          emulatorRef.current = null;
+        }
+        setInitialized(false);
+      } catch (error) {
+        console.error('Error cleaning up:', error);
       }
     };
-  }, [environment, initialized, toast]);
+  }, [environment, initialized, toast, containerMounted]);
 
   const handleSendMessage = async () => {
     if (!input.trim() || !aiAgentRef.current || agentStatus !== 'running') return;

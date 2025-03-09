@@ -57,7 +57,7 @@ export function createAIModel(options: AIModelOptions): AIModel {
  */
 export function getAvailableModels(provider: AIProvider): { id: string; name: string }[] {
   switch (provider) {
-    case 'deepseek':
+    case 'deepseek': 
       return [
         { id: 'deepseek-coder', name: 'DeepSeek Coder' },
         { id: 'deepseek-chat', name: 'DeepSeek Chat' },
