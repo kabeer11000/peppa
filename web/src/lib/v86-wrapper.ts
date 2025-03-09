@@ -1,4 +1,3 @@
-import V86Starter from "v86";
 
 export type V86Options = {
   memory_size?: number;
@@ -57,7 +56,7 @@ export class V86Wrapper {
     };
 
     // Initialize the emulator
-    this.emulator = new V86Starter(mergedOptions);
+    this.emulator = new window.V86(mergedOptions);
     
     // Set up event listeners
     this.setupEventListeners();
